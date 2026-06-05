@@ -32,6 +32,20 @@ docker compose up --build
 Frontend: http://localhost:5173  
 Backend API: http://localhost:8000/docs
 
+## GitHub Pages Frontend Deploy
+
+This repo includes a GitHub Actions workflow at `.github/workflows/deploy-frontend.yml`.
+
+After pushing to GitHub:
+
+1. Open the GitHub repository.
+2. Go to `Settings` -> `Pages`.
+3. Under `Build and deployment`, choose `GitHub Actions`.
+4. Push to the `main` branch.
+5. Open the Pages URL shown by GitHub.
+
+The GitHub Pages build deploys the frontend only. The app can still be explored in local demo mode without the backend. For full production APIs, deploy the FastAPI backend separately.
+
 ## Local Development
 
 Backend:
