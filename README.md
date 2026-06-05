@@ -2,6 +2,14 @@
 
 InterviewX AI is a production-oriented AI interview intelligence platform for resume analysis, adaptive interviews, scoring, analytics, weakness detection, and personalized improvement plans.
 
+## Live Website
+
+Use this link for the GitHub-hosted frontend:
+
+[Open InterviewX AI](https://aarjusingh10.github.io/InterviewX-AI/)
+
+Do not use `localhost` on GitHub. `localhost` only works on the computer where the development server is running.
+
 ## What Is Included
 
 - React + TypeScript + Tailwind + Framer Motion frontend
@@ -19,7 +27,7 @@ InterviewX AI is a production-oriented AI interview intelligence platform for re
 - [Database Schema](docs/DATABASE_SCHEMA.md)
 - [Deployment](docs/DEPLOYMENT.md)
 
-## Quick Start
+## Run Locally
 
 1. Copy `.env.example` to `.env`.
 2. Set `JWT_SECRET_KEY` and optionally `GEMINI_API_KEY`.
@@ -42,7 +50,7 @@ After pushing to GitHub:
 2. Go to `Settings` -> `Pages`.
 3. Under `Build and deployment`, choose `GitHub Actions`.
 4. Push to the `main` branch.
-5. Open the Pages URL shown by GitHub.
+5. Open [https://aarjusingh10.github.io/InterviewX-AI/](https://aarjusingh10.github.io/InterviewX-AI/).
 
 The GitHub Pages build deploys the frontend only. The app can still be explored in local demo mode without the backend. For full production APIs, deploy the FastAPI backend separately.
 
