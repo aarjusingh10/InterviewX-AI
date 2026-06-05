@@ -30,7 +30,7 @@ services:
     runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
-    staticPublishPath: dist
+    staticPublishPath: frontend/dist
     envVars:
       - key: VITE_API_BASE_URL
         value: https://interviewx-ai-api.onrender.com
@@ -38,4 +38,3 @@ services:
 databases:
   - name: interviewx-ai-db
     plan: free
-
