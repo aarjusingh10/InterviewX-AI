@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const API = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
+const API = import.meta.env.VITE_API_BASE_URL || (window.location.hostname === "localhost" ? `${window.location.protocol}//${window.location.hostname}:8000` : "");
 
 type User = { id: number; email: string; full_name: string };
 type Resume = { id: number; filename: string; parsed: Record<string, any>; scores: Record<string, any>; suggestions: any[] };
@@ -66,6 +66,9 @@ const difficulties = ["Beginner", "Intermediate", "Advanced", "FAANG"];
 const personalities = ["Friendly Recruiter", "Startup Founder", "Senior Engineer", "FAANG Interviewer", "HR Manager"];
 
 async function request(path: string, token: string | null, options: RequestInit = {}) {
+  if (!API) {
+    throw new Error("Backend is not hosted yet. Running InterviewX in local demo mode.");
+  }
   let response: Response;
   try {
     response = await fetch(`${API}${path}`, {

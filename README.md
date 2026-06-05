@@ -26,6 +26,13 @@ Do not use `localhost` on GitHub. `localhost` only works on the computer where t
 - [API Routes](docs/API.md)
 - [Database Schema](docs/DATABASE_SCHEMA.md)
 - [Deployment](docs/DEPLOYMENT.md)
+- [Hosting](docs/HOSTING.md)
+
+## Full Hosting
+
+For a real hosted app with frontend, backend, and database, use Render Blueprint deployment with `render.yaml`.
+
+See [Hosting](docs/HOSTING.md).
 
 ## Run Locally
 
