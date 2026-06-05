@@ -30,7 +30,7 @@ Do not use `localhost` on GitHub. `localhost` only works on the computer where t
 
 ## Full Hosting
 
-For a real hosted app with frontend, backend, and database, use Render Blueprint deployment with `render.yaml`.
+For the fastest public website, use Render Blueprint deployment with `render.yaml`. It deploys the frontend static site and runs the product in demo mode.
 
 See [Hosting](docs/HOSTING.md).
 
