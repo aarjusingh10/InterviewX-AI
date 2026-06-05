@@ -3,5 +3,5 @@ services:
     name: interviewx-ai-web
     runtime: static
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     staticPublishPath: dist
