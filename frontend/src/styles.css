@@ -138,6 +138,13 @@ header h1 { font-size: clamp(2rem, 4vw, 4.6rem); line-height: .95; margin-bottom
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .chips span { border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); padding: 7px 10px; border-radius: 999px; color: #dce7f7; }
 .resume-results p, .question-list p { color: #b9c6d8; line-height: 1.5; display: flex; gap: 8px; }
+.score-points { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.score-points div { border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.045); border-radius: 8px; padding: 10px; }
+.score-points strong { display: block; font-size: 1.45rem; color: #fff; }
+.score-points span { display: block; color: var(--muted); font-size: .78rem; margin-bottom: 8px; }
+meter { width: 100%; height: 7px; }
+meter::-webkit-meter-bar { background: rgba(255,255,255,.08); border: 0; border-radius: 999px; }
+meter::-webkit-meter-optimum-value { background: linear-gradient(90deg, var(--aqua), var(--blue)); border-radius: 999px; }
 .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .question-list { margin-top: 14px; display: grid; gap: 8px; }
 .question-list span { flex: 0 0 26px; height: 26px; display: grid; place-items: center; background: rgba(49,230,209,.12); border-radius: 8px; color: var(--aqua); }
@@ -166,6 +173,15 @@ header h1 { font-size: clamp(2rem, 4vw, 4.6rem); line-height: .95; margin-bottom
 .transcript article, .weakness, .roadmap-row { border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.04); border-radius: 8px; padding: 14px; }
 .transcript p, .weakness p, .roadmap-row p { color: #b9c6d8; line-height: 1.55; margin: 8px 0; }
 .transcript em { color: var(--aqua); font-style: normal; }
+.answer-review { margin-top: 12px; border-top: 1px solid rgba(255,255,255,.08); padding-top: 12px; display: grid; gap: 10px; }
+.answer-score { display: flex; align-items: baseline; gap: 8px; color: var(--aqua); }
+.answer-score strong { font-size: 1.8rem; }
+.answer-score span { color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; }
+.point-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.point-list div { border: 1px solid rgba(255,255,255,.08); background: rgba(49,230,209,.045); border-radius: 8px; padding: 9px; }
+.point-list span { display: block; color: #fff; font-weight: 800; font-size: .82rem; }
+.point-list strong { display: block; color: var(--aqua); margin: 3px 0; }
+.point-list small { display: block; color: var(--muted); line-height: 1.35; }
 .radar { width: 100%; max-height: 340px; }
 .radar text { fill: #9fb0c8; font-size: 8px; text-transform: capitalize; }
 .empty-chart { min-height: 280px; display: grid; place-items: center; color: #9fb0c8; }
@@ -239,6 +255,7 @@ header h1 { font-size: clamp(2rem, 4vw, 4.6rem); line-height: .95; margin-bottom
   aside { position: static; height: auto; flex-direction: row; overflow-x: auto; align-items: center; }
   .metrics-grid, .two-col { grid-template-columns: 1fr 1fr; }
   .form-grid { grid-template-columns: 1fr; }
+  .point-list, .score-points { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -248,4 +265,5 @@ header h1 { font-size: clamp(2rem, 4vw, 4.6rem); line-height: .95; margin-bottom
   aside { padding: 14px; }
   aside a { display: none; }
   .roadmap-row { grid-template-columns: 1fr; }
+  .point-list, .score-points { grid-template-columns: 1fr; }
 }

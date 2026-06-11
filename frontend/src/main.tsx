@@ -19,12 +19,14 @@ import {
   Upload,
   UserRound
 } from "lucide-react";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
 import "./styles.css";
 
 const API = import.meta.env.VITE_API_BASE_URL || (window.location.hostname === "localhost" ? `${window.location.protocol}//${window.location.hostname}:8000` : "");
 
 type User = { id: number; email: string; full_name: string };
 type Resume = { id: number; filename: string; parsed: Record<string, any>; scores: Record<string, any>; suggestions: any[] };
+type ScorePoint = { label: string; points: number; max: number; note: string };
 type Interview = {
   id: number;
   role: string;
@@ -113,9 +115,29 @@ function signalScore(text: string, roleName: string) {
   return { tokenCount: tokenList.length, roleHits, universalHits, metrics, star, filler, lengthScore, specificity };
 }
 
+function answerQuality(question: string, answerText: string, roleName: string) {
+  const signal = signalScore(answerText, roleName);
+  const reasoning = countMatches(answerText, ["because", "therefore", "tradeoff", "constraint", "risk", "alternative", "measured"]);
+  const leadership = countMatches(answerText, ["led", "owned", "managed", "collaborated", "stakeholder", "customer", "user", "team"]);
+  const points: ScorePoint[] = [
+    { label: "Depth", points: clamp(signal.tokenCount / 75 * 20, 0, 20), max: 20, note: signal.tokenCount >= 60 ? "Detailed answer" : "Add more context and result detail" },
+    { label: "Role Fit", points: clamp(signal.roleHits * 4, 0, 20), max: 20, note: `${signal.roleHits} role-specific signals found` },
+    { label: "Metrics", points: clamp(signal.metrics * 8, 0, 20), max: 20, note: signal.metrics ? "Uses measurable proof" : "Add numbers or measurable impact" },
+    { label: "Structure", points: clamp(signal.star * 4, 0, 20), max: 20, note: signal.star >= 3 ? "Good STAR structure" : "Use situation, action, result" },
+    { label: "Reasoning", points: clamp(reasoning * 4 + leadership * 2 - signal.filler * 3, 0, 20), max: 20, note: reasoning ? "Explains decisions" : "Explain why, tradeoffs, and risks" }
+  ];
+  const total = points.reduce((sum, item) => sum + item.points, 0);
+  const feedback = total >= 82
+    ? "Strong answer. Keep adding specific metrics and decision tradeoffs."
+    : total >= 62
+      ? "Decent answer. Improve with clearer metrics, structure, and role-specific keywords."
+      : "Weak answer. Use a concrete example, add measurable results, and explain the decision.";
+  return { question, score: clamp(total), points, feedback };
+}
+
 async function request(path: string, token: string | null, options: RequestInit = {}) {
   if (!API) {
-    throw new Error("Backend is not hosted yet. Running InterviewX in local demo mode.");
+    throw new Error("Backend is not hosted.");
   }
   let response: Response;
   try {
@@ -143,20 +165,119 @@ async function request(path: string, token: string | null, options: RequestInit 
   return response.json();
 }
 
-function demoUser(fullName: string, emailAddress: string): User {
+function localUser(fullName: string, emailAddress: string): User {
   return { id: 1, email: emailAddress, full_name: fullName || "InterviewX Candidate" };
 }
 
-function demoResume(file?: File): Resume {
-  const filename = file?.name || "demo-resume.pdf";
+function getLocalAccounts(): Record<string, { full_name: string; password: string }> {
+  try {
+    return JSON.parse(localStorage.getItem("interviewx_accounts") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalAccount(emailAddress: string, fullName: string, accountPassword: string) {
+  const accounts = getLocalAccounts();
+  accounts[emailAddress.toLowerCase()] = { full_name: fullName || "InterviewX Candidate", password: accountPassword };
+  localStorage.setItem("interviewx_accounts", JSON.stringify(accounts));
+}
+
+async function resumeEvidence(file: File) {
+  const filename = file.name.toLowerCase();
+  const extensionOk = /\.(pdf|docx|doc)$/.test(filename);
+  const nameSignal = /\b(resume|cv|curriculum|profile|portfolio)\b/.test(filename) ? 2 : 0;
+  const sizeKb = file.size / 1024;
+  const text = await extractResumeText(file);
+  const lowerText = text.toLowerCase();
+  const evidenceTerms = [
+    "experience",
+    "education",
+    "skills",
+    "project",
+    "certification",
+    "linkedin",
+    "github",
+    "email",
+    "phone",
+    "summary",
+    "objective",
+    "internship",
+    "work",
+    "achievement"
+  ];
+  const hits = evidenceTerms.filter((term) => lowerText.includes(term)).length;
+  const emailHit = /@/.test(lowerText) ? 1 : 0;
+  const phoneHit = /\d{3}[-.\s]?\d{3}[-.\s]?\d{4}|\+?\d{10,}/.test(lowerText) ? 1 : 0;
+  const sizeSignal = sizeKb >= 25 && sizeKb <= 2500 ? 1 : 0;
+  const textSignal = words(text).length > 80 ? 3 : words(text).length > 35 ? 1 : 0;
+  const score = nameSignal + hits + emailHit + phoneHit + sizeSignal + textSignal;
+  return {
+    isLikelyResume: extensionOk && score >= 4,
+    score,
+    hits,
+    sizeKb,
+    text,
+    reason: !extensionOk
+      ? "Only PDF, DOC, and DOCX files are supported."
+      : words(text).length < 35
+        ? "Could not read enough resume text. If this is a scanned/image PDF, export it as a text-based PDF or DOCX."
+      : score < 4
+        ? "This file does not look like a resume. Upload a resume/CV containing sections like skills, experience, education, projects, email, or LinkedIn."
+        : ""
+  };
+}
+
+async function extractResumeText(file: File) {
+  const lower = file.name.toLowerCase();
+  const buffer = await file.arrayBuffer();
+  if (lower.endsWith(".pdf")) {
+    try {
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
+      const pages: string[] = [];
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const content = await page.getTextContent();
+        pages.push(content.items.map((item: any) => item.str || "").join(" "));
+      }
+      return pages.join("\n").trim();
+    } catch {
+      return new TextDecoder("latin1").decode(buffer);
+    }
+  }
+  if (lower.endsWith(".docx") || lower.endsWith(".doc")) {
+    try {
+      const mammoth = await import("mammoth/mammoth.browser");
+      const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+      return result.value.trim();
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function extractSection(text: string, names: string[]) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const start = lines.findIndex((line) => names.some((name) => line.toLowerCase().includes(name)));
+  if (start < 0) return [];
+  const next = lines.findIndex((line, index) => index > start && /^(experience|education|skills|projects|certifications|summary|achievements|work)/i.test(line));
+  return lines.slice(start + 1, next > start ? next : start + 8).filter((line) => line.length > 3).slice(0, 6);
+}
+
+function localResume(file: File, evidence: Awaited<ReturnType<typeof resumeEvidence>>): Resume {
+  const filename = file.name;
   const lowerName = filename.toLowerCase();
-  const inferredFamily = ["marketing", "sales", "product", "design", "finance", "business", "operations", "ai", "ml", "data", "backend", "frontend"].find((term) => lowerName.includes(term)) || "general";
-  const sizeKb = file ? file.size / 1024 : 180;
+  const text = evidence.text;
+  const lowerText = text.toLowerCase();
+  const tokenCount = words(text).length;
+  const inferredFamily = ["marketing", "sales", "product", "design", "finance", "business", "operations", "ai", "ml", "data", "backend", "frontend"].find((term) => lowerName.includes(term) || lowerText.includes(term)) || "general";
+  const sizeKb = file.size / 1024;
   const isPdf = lowerName.endsWith(".pdf");
   const isDocx = lowerName.endsWith(".docx") || lowerName.endsWith(".doc");
-  const fileQuality = isPdf ? 9 : isDocx ? 6 : -8;
-  const sizeScore = sizeKb < 40 ? -14 : sizeKb > 1600 ? -8 : sizeKb > 180 ? 10 : 4;
-  const inferredSkills =
+  const skillCatalog =
     inferredFamily.includes("marketing") ? ["Campaign Strategy", "SEO", "Conversion", "Funnel Analytics", "Content", "Brand"] :
     inferredFamily.includes("sales") ? ["Lead Qualification", "CRM", "Discovery Calls", "Objection Handling", "Pipeline"] :
     inferredFamily.includes("product") ? ["Roadmapping", "User Research", "Prioritization", "Metrics", "Experimentation"] :
@@ -164,22 +285,33 @@ function demoResume(file?: File): Resume {
     inferredFamily.includes("finance") || inferredFamily.includes("business") || inferredFamily.includes("operations") ? ["KPI Analysis", "Forecasting", "Dashboards", "Process Improvement", "Stakeholders"] :
     inferredFamily.includes("ai") || inferredFamily.includes("ml") || inferredFamily.includes("data") ? ["Python", "Machine Learning", "Metrics", "SQL", "Model Evaluation", "Deployment"] :
     ["React", "TypeScript", "FastAPI", "PostgreSQL", "Docker", "Testing", "System Design"];
-  const keywordScore = Math.min(28, inferredSkills.length * 4);
-  const ats = clamp(48 + fileQuality + sizeScore + keywordScore);
-  const resumeStrength = clamp(42 + fileQuality + sizeScore + inferredSkills.length * 5 + (lowerName.includes("updated") || lowerName.includes("final") ? 6 : 0));
-  const internshipReadiness = clamp(46 + keywordScore + (sizeKb > 80 ? 10 : 0) + (isPdf ? 6 : 0));
-  const industryReadiness = clamp(40 + keywordScore + (sizeKb > 180 ? 14 : 5) + (lowerName.includes("project") ? 6 : 0));
+  const inferredSkills = skillCatalog.filter((skill) => lowerText.includes(skill.toLowerCase().split(" ")[0]) || lowerName.includes(skill.toLowerCase().split(" ")[0]));
+  const finalSkills = inferredSkills.length ? inferredSkills : skillCatalog.slice(0, 4);
+  const sectionHits = ["experience", "education", "skills", "project", "certification", "summary"].filter((term) => lowerText.includes(term)).length;
+  const quantified = (lowerText.match(/\b\d+%|\b\d+x|\b\d+\+|\b\d{2,}\b/g) || []).length;
+  const actionVerbs = countMatches(lowerText, ["built", "led", "created", "improved", "managed", "launched", "designed", "automated", "analyzed", "optimized"]);
+  const contactHits = (/@/.test(lowerText) ? 1 : 0) + (lowerText.includes("linkedin") ? 1 : 0) + (lowerText.includes("github") ? 1 : 0);
+  const weakWords = countMatches(lowerText, ["responsible for", "helped", "worked on", "basic", "familiar"]);
+  const keywordScore = Math.min(28, finalSkills.length * 4);
+  const evidenceBoost = Math.min(18, evidence.score * 3);
+  const lengthScore = tokenCount < 160 ? -12 : tokenCount > 900 ? -5 : 8;
+  const ats = clamp(28 + sectionHits * 7 + keywordScore + contactHits * 4 + evidenceBoost + lengthScore - weakWords * 3);
+  const resumeStrength = clamp(26 + actionVerbs * 3 + quantified * 4 + sectionHits * 6 + finalSkills.length * 3 + lengthScore - weakWords * 3);
+  const internshipReadiness = clamp(34 + keywordScore + sectionHits * 5 + actionVerbs * 2 + (isPdf || isDocx ? 5 : 0) - weakWords * 2);
+  const industryReadiness = clamp(28 + keywordScore + quantified * 5 + actionVerbs * 3 + contactHits * 3 + evidenceBoost - weakWords * 3);
   const missingKeywords = inferredFamily === "general" ? ["role-specific keywords", "metrics", "tools", "impact"] : ["metrics", "ownership", "results", "stakeholder impact"];
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const likelyName = lines.find((line) => /^[a-zA-Z][a-zA-Z .'-]{3,45}$/.test(line) && !/resume|curriculum|email|phone/i.test(line)) || "Candidate";
   return {
     id: Date.now(),
     filename,
     parsed: {
-      name: "InterviewX Candidate",
-      skills: inferredSkills,
-      projects: [`${inferredFamily} portfolio project inferred from ${filename}. Add measurable outcomes for stronger scoring.`],
-      experience: [`Resume file quality signal: ${Math.round(sizeKb)} KB ${isPdf ? "PDF" : isDocx ? "document" : "unsupported type"}.`],
-      education: ["Computer Science"],
-      certifications: ["AI Engineering", "Cloud Deployment"]
+      name: likelyName,
+      skills: finalSkills,
+      projects: extractSection(text, ["project", "projects"]).length ? extractSection(text, ["project", "projects"]) : ["No clear project section detected"],
+      experience: extractSection(text, ["experience", "work", "internship"]).length ? extractSection(text, ["experience", "work", "internship"]) : ["No clear experience section detected"],
+      education: extractSection(text, ["education"]).length ? extractSection(text, ["education"]) : ["No clear education section detected"],
+      certifications: extractSection(text, ["certification", "course"]).length ? extractSection(text, ["certification", "course"]) : []
     },
     scores: {
       ats,
@@ -188,14 +320,15 @@ function demoResume(file?: File): Resume {
       industry_readiness: industryReadiness,
       detections: {
         missing_keywords: missingKeywords,
-        weak_projects: sizeKb < 80 ? ["Resume file appears small; project detail may be too thin"] : ["Add more measurable project outcomes"],
+        weak_projects: evidence.hits < 5 ? ["Resume evidence is limited; add clearer sections and project details"] : ["Add more measurable project outcomes"],
         missing_skills: missingKeywords,
         poor_sections: isPdf || isDocx ? [] : ["file format"]
       }
     },
     suggestions: [
       { area: "Impact", suggestion: `Add measurable outcomes for ${inferredFamily} work, such as users, revenue, conversion, accuracy, cost, time saved, or satisfaction.` },
-      { area: "Evidence", suggestion: sizeKb < 80 ? "Resume appears short from file size. Add project details, responsibilities, tools, and measurable results." : "Good file-size signal. Improve reliability by making every bullet measurable." },
+      { area: "Evidence", suggestion: `Read ${tokenCount} words and detected ${evidence.hits} resume evidence signals. Add clear Skills, Experience, Education, Projects, links, and quantified bullets for higher confidence.` },
+      { area: "Metrics", suggestion: `Detected ${quantified} numeric impact signals and ${actionVerbs} action verbs. Strong resumes usually show measurable results in most bullets.` },
       { area: "Keywords", suggestion: `Add evidence-backed keywords: ${missingKeywords.join(", ")}.` }
     ]
   };
@@ -291,6 +424,7 @@ function localFollowUp(candidateAnswer: string, selectedRole: string) {
 
 function scoreLocalInterview(activeInterview: Interview): Interview {
   const transcript = activeInterview.transcript || [];
+  const answerReviews = transcript.map((turn) => turn.review || answerQuality(String(turn.question || ""), String(turn.answer || ""), activeInterview.role));
   const signals = transcript.map((turn) => signalScore(String(turn.answer || ""), activeInterview.role));
   const answersText = transcript.map((turn) => String(turn.answer || "")).join(" ");
   const avg = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -318,7 +452,8 @@ function scoreLocalInterview(activeInterview: Interview): Interview {
     leadership
   };
   const difficultyMultiplier = activeInterview.difficulty === "FAANG" ? 0.92 : activeInterview.difficulty === "Advanced" ? 0.96 : activeInterview.difficulty === "Beginner" ? 1.04 : 1;
-  const overall = clamp(Object.values(breakdown).reduce((sum, value) => sum + value, 0) / 6 * difficultyMultiplier);
+  const answerAverage = answerReviews.length ? answerReviews.reduce((sum, review) => sum + review.score, 0) / answerReviews.length : 0;
+  const overall = clamp((Object.values(breakdown).reduce((sum, value) => sum + value, 0) / 6 * 0.72 + answerAverage * 0.28) * difficultyMultiplier);
   const weaknesses = detectLocalWeaknesses(activeInterview, breakdown);
   const salaryBase = roleFamily(activeInterview.role) === "marketing" ? 92000 : roleFamily(activeInterview.role) === "sales" ? 98000 : roleFamily(activeInterview.role) === "product" ? 125000 : roleFamily(activeInterview.role) === "design" ? 95000 : roleFamily(activeInterview.role) === "business" ? 90000 : 118000;
   const salaryFactor = 0.72 + overall / 240;
@@ -334,18 +469,15 @@ function scoreLocalInterview(activeInterview: Interview): Interview {
         answer_depth: Math.round(avgLength),
         structure_coverage: structureCoverage,
         filler_penalty: fillerPenalty,
+        answer_average: Math.round(answerAverage),
         difficulty_multiplier: difficultyMultiplier
       },
+      answer_reviews: answerReviews,
       feedback: "Score is calculated from role keyword coverage, measurable evidence, answer depth, STAR structure, reasoning, confidence, and filler-word penalty."
     },
     weaknesses: weaknesses.length ? weaknesses : [{ area: "Depth Under Follow-Up", severity: "Low", explanation: "Good performance. Practice deeper follow-ups with faster structure and stronger numbers." }],
     roadmap: {
-      weekly_goals: [
-        "Week 1: tighten fundamentals and rewrite every project story with problem, action, result, and tradeoff.",
-        "Week 2: build one production feature with tests, deployment, monitoring, and a clean README.",
-        "Week 3: practice role-specific interviews daily and review weak answer patterns.",
-        "Week 4: run full mock interviews, improve pacing, and polish final resume bullets."
-      ],
+      weekly_goals: buildRoadmap(activeInterview.role, weaknesses, breakdown),
       daily_tasks: ["45 minutes fundamentals", "45 minutes coding or project work", "20 minutes spoken answer practice"],
       projects_to_build: ["Interview analytics dashboard", "RAG assistant", "Production API with observability"]
     },
@@ -383,6 +515,26 @@ function detectLocalWeaknesses(activeInterview: Interview, breakdown: Record<str
   });
 
   return findings.slice(0, 5);
+}
+
+function buildRoadmap(roleName: string, weaknesses: { area: string; severity: string; explanation: string }[], breakdown: Record<string, number>) {
+  const family = roleFamily(roleName);
+  const weakest = Object.entries(breakdown).sort((a, b) => a[1] - b[1])[0]?.[0]?.replaceAll("_", " ") || "interview depth";
+  const rolePractice =
+    family === "marketing" ? "campaign metrics, funnel analysis, CAC, ROI, and channel strategy" :
+    family === "sales" ? "discovery calls, objection handling, CRM updates, and closing stories" :
+    family === "product" ? "roadmap tradeoffs, user pain, activation metrics, and experiment design" :
+    family === "design" ? "portfolio case studies, user research evidence, accessibility, and design handoff" :
+    family === "business" ? "KPI trees, forecasting, dashboard storytelling, and stakeholder tradeoffs" :
+    family === "ai" ? "model metrics, data leakage, overfitting, deployment monitoring, and RAG evaluation" :
+    "system design, testing, deployment, data modeling, and failure handling";
+  const weaknessFocus = weaknesses[0]?.area || "Answer Depth";
+  return [
+    `Week 1: repair ${weakest} by rewriting 5 answers with STAR structure and measurable outcomes.`,
+    `Week 2: practice ${rolePractice}; record yourself and remove vague language.`,
+    `Week 3: build or document one proof project/case study that directly targets ${weaknessFocus}.`,
+    `Week 4: complete 3 full mock interviews and improve the lowest score dimension by at least 12 points.`
+  ];
 }
 
 function ScoreRing({ value, label }: { value: number; label: string }) {
@@ -459,8 +611,10 @@ function App() {
 
   useEffect(() => {
     if (!token || user) return;
-    if (token.startsWith("demo-")) {
-      setUser(demoUser(name, email));
+    if (token.startsWith("local-")) {
+      const savedEmail = localStorage.getItem("interviewx_current_email") || email;
+      const account = getLocalAccounts()[savedEmail.toLowerCase()];
+      setUser(localUser(account?.full_name || name, savedEmail));
       return;
     }
     request("/api/v1/auth/me", token)
@@ -489,11 +643,29 @@ function App() {
       setUser(data.user);
       setMessage("Workspace secured. You can upload a resume now.");
     } catch (error: any) {
-      const demoToken = `demo-${crypto.randomUUID()}`;
-      localStorage.setItem("interviewx_token", demoToken);
-      setToken(demoToken);
-      setUser(demoUser(name, email));
-      setMessage("Demo workspace is ready. Backend was unreachable, so InterviewX is running locally without errors.");
+      const accounts = getLocalAccounts();
+      const normalizedEmail = email.toLowerCase();
+      if (authMode === "signup") {
+        saveLocalAccount(normalizedEmail, name, password);
+        const localToken = `local-${crypto.randomUUID()}`;
+        localStorage.setItem("interviewx_token", localToken);
+        localStorage.setItem("interviewx_current_email", normalizedEmail);
+        setToken(localToken);
+        setUser(localUser(name, normalizedEmail));
+        setMessage("Account created. You can upload your resume now.");
+      } else {
+        const account = accounts[normalizedEmail];
+        if (!account || account.password !== password) {
+          setMessage("Invalid login. If this is your first time, use Signup to create an account.");
+          return;
+        }
+        const localToken = `local-${crypto.randomUUID()}`;
+        localStorage.setItem("interviewx_token", localToken);
+        localStorage.setItem("interviewx_current_email", normalizedEmail);
+        setToken(localToken);
+        setUser(localUser(account.full_name, normalizedEmail));
+        setMessage("Login successful. You can upload your resume now.");
+      }
     } finally {
       setBusy(false);
     }
@@ -503,14 +675,26 @@ function App() {
     if (!token) return;
     setBusy(true);
     try {
+      const evidence = await resumeEvidence(file);
+      if (!evidence.isLikelyResume) {
+        setResume(null);
+        setMessage(evidence.reason);
+        return;
+      }
       const form = new FormData();
       form.append("file", file);
       const data = await request("/api/v1/resumes/upload", token, { method: "POST", body: form });
       setResume(data);
       setMessage("Resume analyzed with ATS, readiness, and improvement signals.");
     } catch (error: any) {
-      setResume(demoResume(file));
-      setMessage("Resume demo analysis is ready. Backend upload failed, so local scoring was used.");
+      const evidence = await resumeEvidence(file);
+      if (!evidence.isLikelyResume) {
+        setResume(null);
+        setMessage(evidence.reason);
+        return;
+      }
+      setResume(localResume(file, evidence));
+      setMessage("Resume analyzed with local scoring. For highest accuracy, deploy the FastAPI backend parser.");
     } finally {
       setBusy(false);
     }
@@ -540,7 +724,7 @@ function App() {
       };
       setInterview(data);
       setActiveQuestion(0);
-      setMessage("Interview room is live in local mode. No fetch errors, just practice.");
+      setMessage("Interview room is live. The interviewer will adapt to your answers.");
       speak(data.questions[0]?.text);
     } finally {
       setBusy(false);
@@ -562,7 +746,8 @@ function App() {
           eye_contact_signal: 0.7
         })
       });
-      setInterview({ ...interview, transcript: [...interview.transcript, data.turn] });
+      const reviewedTurn = { ...data.turn, review: answerQuality(currentQuestion.text, answer, interview.role) };
+      setInterview({ ...interview, transcript: [...interview.transcript, reviewedTurn] });
       setAnswer("");
       setMessage(`Follow-up: ${data.follow_up}`);
       speak(data.follow_up);
@@ -577,6 +762,7 @@ function App() {
         confidence_signal: Math.min(0.95, Math.max(0.42, answer.split(" ").length / 80)),
         emotion_signal: "focused",
         eye_contact_signal: 0.72,
+        review: answerQuality(currentQuestion.text, answer, interview.role),
         answered_at: new Date().toISOString()
       };
       setInterview({ ...interview, transcript: [...interview.transcript, turn] });
@@ -598,7 +784,7 @@ function App() {
       setMessage("Scoring, weakness detection, premium analytics, and roadmap are ready.");
     } catch (error: any) {
       setInterview(scoreLocalInterview(interview));
-      setMessage("Scoring, weakness detection, premium analytics, and roadmap are ready in local mode.");
+      setMessage("Scoring, weakness detection, premium analytics, and roadmap are ready.");
     } finally {
       setBusy(false);
     }
@@ -759,9 +945,6 @@ function App() {
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
             <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Password" />
             <button className="primary" onClick={authenticate} disabled={busy}><Shield /> Enter Dashboard</button>
-            <button className="ghost" onClick={() => request("/api/v1/auth/google", null, { method: "POST", body: JSON.stringify({ id_token: crypto.randomUUID() }) }).then((data) => { localStorage.setItem("interviewx_token", data.access_token); setToken(data.access_token); setUser(data.user); }).catch(() => { const demoToken = `demo-${crypto.randomUUID()}`; localStorage.setItem("interviewx_token", demoToken); setToken(demoToken); setUser(demoUser("Google Demo User", "google-demo@interviewx.local")); setMessage("Google demo workspace is ready in local mode."); })}>
-              <Sparkles /> Google Demo
-            </button>
             {message && <p className="status">{message}</p>}
           </div>
         </motion.section>
@@ -776,7 +959,7 @@ function App() {
         {["Command Center", "Resume Analyzer", "Voice Interview", "Analytics", "Roadmap"].map((item, index) => (
           <a key={item} href={`#panel-${index}`}>{item}</a>
         ))}
-        <button className="logout" onClick={() => { localStorage.removeItem("interviewx_token"); setToken(null); setUser(null); }}><LogOut /> Sign out</button>
+        <button className="logout" onClick={() => { localStorage.removeItem("interviewx_token"); localStorage.removeItem("interviewx_current_email"); setToken(null); setUser(null); }}><LogOut /> Sign out</button>
       </aside>
 
       <section className="workspace">
@@ -813,6 +996,20 @@ function App() {
               <div className="resume-results">
                 <h3>{resume.parsed.name || "Candidate"}</h3>
                 <div className="chips">{(resume.parsed.skills || []).slice(0, 10).map((skill: string) => <span key={skill}>{skill}</span>)}</div>
+                <div className="score-points">
+                  {[
+                    ["ATS", resume.scores.ats],
+                    ["Strength", resume.scores.resume_strength],
+                    ["Internship", resume.scores.internship_readiness],
+                    ["Industry", resume.scores.industry_readiness]
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <strong>{String(value)}</strong>
+                      <span>{label}</span>
+                      <meter min="0" max="100" value={Number(value)} />
+                    </div>
+                  ))}
+                </div>
                 {resume.suggestions.map((item, index) => <p key={index}><CheckCircle2 /> <b>{item.area}</b> {item.suggestion}</p>)}
               </div>
             )}
@@ -861,6 +1058,24 @@ function App() {
                 <strong>{turn.question}</strong>
                 <p>{turn.answer}</p>
                 <em>{turn.follow_up}</em>
+                {turn.review && (
+                  <div className="answer-review">
+                    <div className="answer-score">
+                      <strong>{turn.review.score}</strong>
+                      <span>answer score</span>
+                    </div>
+                    <div className="point-list">
+                      {turn.review.points.map((point: ScorePoint) => (
+                        <div key={point.label}>
+                          <span>{point.label}</span>
+                          <strong>{point.points}/{point.max}</strong>
+                          <small>{point.note}</small>
+                        </div>
+                      ))}
+                    </div>
+                    <p>{turn.review.feedback}</p>
+                  </div>
+                )}
               </article>
             ))}
           </div>

@@ -1,12 +1,13 @@
 # Hosting InterviewX AI
 
-## Fastest Working Option: Render Static Site
+## Render Frontend + Backend
 
 This repo includes `render.yaml`, which creates:
 
 - `interviewx-ai-web`: React frontend static site
+- `interviewx-ai-api`: FastAPI backend service
 
-The hosted frontend runs in demo mode if no backend URL is configured. This avoids Render free-tier database limits and gives you a public website immediately.
+The backend uses SQLite on Render to avoid the free-tier PostgreSQL database limit. This is suitable for a hosted demo. For production, move `DATABASE_URL` to PostgreSQL from Neon, Supabase, Render paid database, or another managed provider.
 
 ## Steps
 
@@ -18,13 +19,20 @@ The hosted frontend runs in demo mode if no backend URL is configured. This avoi
 6. Wait for both services to deploy.
 7. Open the frontend URL Render gives you.
 
-Expected URL if the name is available:
+Expected URLs if the names are available:
 
 - Frontend: `https://interviewx-ai-web.onrender.com`
+- Backend health: `https://interviewx-ai-api.onrender.com/health`
+- Backend docs: `https://interviewx-ai-api.onrender.com/docs`
 
-## Full Backend Later
+If Render adds a suffix to either service name, update these environment variables:
 
-For full backend APIs, create a separate paid or available PostgreSQL database and deploy the FastAPI backend as a separate Render web service. Render free accounts can fail Blueprint creation when there is already one active free database.
+- frontend `VITE_API_BASE_URL`
+- backend `FRONTEND_ORIGIN`
+
+## Production Database Later
+
+For durable production data, create a managed PostgreSQL database and set backend `DATABASE_URL` to that connection string. SQLite on free Render can reset when the service is redeployed or restarted.
 
 ## GitHub Pages Option
 
