@@ -65,6 +65,54 @@ const roles = [
 const difficulties = ["Beginner", "Intermediate", "Advanced", "FAANG"];
 const personalities = ["Friendly Recruiter", "Startup Founder", "Senior Engineer", "FAANG Interviewer", "HR Manager"];
 
+const roleKeywordMap: Record<string, string[]> = {
+  engineering: ["api", "database", "deploy", "test", "architecture", "latency", "scalable", "cache", "security", "monitoring", "docker", "cloud"],
+  ai: ["model", "algorithm", "dataset", "accuracy", "precision", "recall", "overfitting", "features", "training", "inference", "rag", "embedding"],
+  marketing: ["campaign", "conversion", "funnel", "seo", "cac", "roi", "segment", "channel", "brand", "creative", "lead", "retention"],
+  sales: ["lead", "pipeline", "discovery", "objection", "crm", "quota", "close", "demo", "prospect", "follow-up", "negotiation"],
+  product: ["user", "roadmap", "prioritize", "metric", "experiment", "activation", "retention", "feedback", "mvp", "stakeholder"],
+  design: ["user", "prototype", "accessibility", "wireframe", "usability", "research", "design system", "interaction", "handoff"],
+  business: ["kpi", "revenue", "cost", "forecast", "dashboard", "process", "stakeholder", "risk", "operations", "analysis"]
+};
+
+function clamp(value: number, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function words(text: string) {
+  return text.toLowerCase().match(/[a-z0-9+#.%-]+/g) || [];
+}
+
+function countMatches(text: string, terms: string[]) {
+  const lower = text.toLowerCase();
+  return terms.filter((term) => lower.includes(term)).length;
+}
+
+function roleFamily(roleName: string) {
+  const lower = roleName.toLowerCase();
+  if (lower.includes("ai") || lower.includes("ml") || lower.includes("data scientist")) return "ai";
+  if (lower.includes("marketing")) return "marketing";
+  if (lower.includes("sales")) return "sales";
+  if (lower.includes("product")) return "product";
+  if (lower.includes("design") || lower.includes("ui/ux") || lower.includes("graphic")) return "design";
+  if (lower.includes("finance") || lower.includes("business") || lower.includes("operations")) return "business";
+  return "engineering";
+}
+
+function signalScore(text: string, roleName: string) {
+  const tokenList = words(text);
+  const lower = text.toLowerCase();
+  const family = roleFamily(roleName);
+  const roleHits = countMatches(lower, roleKeywordMap[family]);
+  const universalHits = countMatches(lower, ["because", "tradeoff", "measured", "result", "impact", "challenge", "improved", "learned", "customer", "user"]);
+  const metrics = (lower.match(/\b\d+%|\b\d+x|\b\d+\+|\b\d{2,}\b/g) || []).length;
+  const star = countMatches(lower, ["situation", "task", "action", "result", "problem", "solution", "outcome"]);
+  const filler = countMatches(lower, ["maybe", "kind of", "sort of", "stuff", "things", "basically"]);
+  const lengthScore = clamp((tokenList.length / 75) * 100);
+  const specificity = clamp(roleHits * 12 + universalHits * 5 + metrics * 10 + star * 4 - filler * 8);
+  return { tokenCount: tokenList.length, roleHits, universalHits, metrics, star, filler, lengthScore, specificity };
+}
+
 async function request(path: string, token: string | null, options: RequestInit = {}) {
   if (!API) {
     throw new Error("Backend is not hosted yet. Running InterviewX in local demo mode.");
@@ -100,33 +148,55 @@ function demoUser(fullName: string, emailAddress: string): User {
 }
 
 function demoResume(file?: File): Resume {
+  const filename = file?.name || "demo-resume.pdf";
+  const lowerName = filename.toLowerCase();
+  const inferredFamily = ["marketing", "sales", "product", "design", "finance", "business", "operations", "ai", "ml", "data", "backend", "frontend"].find((term) => lowerName.includes(term)) || "general";
+  const sizeKb = file ? file.size / 1024 : 180;
+  const isPdf = lowerName.endsWith(".pdf");
+  const isDocx = lowerName.endsWith(".docx") || lowerName.endsWith(".doc");
+  const fileQuality = isPdf ? 9 : isDocx ? 6 : -8;
+  const sizeScore = sizeKb < 40 ? -14 : sizeKb > 1600 ? -8 : sizeKb > 180 ? 10 : 4;
+  const inferredSkills =
+    inferredFamily.includes("marketing") ? ["Campaign Strategy", "SEO", "Conversion", "Funnel Analytics", "Content", "Brand"] :
+    inferredFamily.includes("sales") ? ["Lead Qualification", "CRM", "Discovery Calls", "Objection Handling", "Pipeline"] :
+    inferredFamily.includes("product") ? ["Roadmapping", "User Research", "Prioritization", "Metrics", "Experimentation"] :
+    inferredFamily.includes("design") ? ["User Research", "Wireframes", "Prototyping", "Accessibility", "Design Systems"] :
+    inferredFamily.includes("finance") || inferredFamily.includes("business") || inferredFamily.includes("operations") ? ["KPI Analysis", "Forecasting", "Dashboards", "Process Improvement", "Stakeholders"] :
+    inferredFamily.includes("ai") || inferredFamily.includes("ml") || inferredFamily.includes("data") ? ["Python", "Machine Learning", "Metrics", "SQL", "Model Evaluation", "Deployment"] :
+    ["React", "TypeScript", "FastAPI", "PostgreSQL", "Docker", "Testing", "System Design"];
+  const keywordScore = Math.min(28, inferredSkills.length * 4);
+  const ats = clamp(48 + fileQuality + sizeScore + keywordScore);
+  const resumeStrength = clamp(42 + fileQuality + sizeScore + inferredSkills.length * 5 + (lowerName.includes("updated") || lowerName.includes("final") ? 6 : 0));
+  const internshipReadiness = clamp(46 + keywordScore + (sizeKb > 80 ? 10 : 0) + (isPdf ? 6 : 0));
+  const industryReadiness = clamp(40 + keywordScore + (sizeKb > 180 ? 14 : 5) + (lowerName.includes("project") ? 6 : 0));
+  const missingKeywords = inferredFamily === "general" ? ["role-specific keywords", "metrics", "tools", "impact"] : ["metrics", "ownership", "results", "stakeholder impact"];
   return {
     id: Date.now(),
-    filename: file?.name || "demo-resume.pdf",
+    filename,
     parsed: {
       name: "InterviewX Candidate",
-      skills: ["Python", "React", "FastAPI", "PostgreSQL", "Docker", "Machine Learning", "System Design", "RAG", "TypeScript", "Testing"],
-      projects: ["AI interview platform with resume analysis, adaptive questions, scoring, analytics, and PDF reports."],
-      experience: ["Built production-ready full-stack AI applications with secure APIs and modern dashboards."],
+      skills: inferredSkills,
+      projects: [`${inferredFamily} portfolio project inferred from ${filename}. Add measurable outcomes for stronger scoring.`],
+      experience: [`Resume file quality signal: ${Math.round(sizeKb)} KB ${isPdf ? "PDF" : isDocx ? "document" : "unsupported type"}.`],
       education: ["Computer Science"],
       certifications: ["AI Engineering", "Cloud Deployment"]
     },
     scores: {
-      ats: 86,
-      resume_strength: 82,
-      internship_readiness: 88,
-      industry_readiness: 79,
+      ats,
+      resume_strength: resumeStrength,
+      internship_readiness: internshipReadiness,
+      industry_readiness: industryReadiness,
       detections: {
-        missing_keywords: ["observability", "CI/CD", "load testing"],
-        weak_projects: ["Add more metrics to project outcomes"],
-        missing_skills: ["distributed systems", "monitoring"],
-        poor_sections: []
+        missing_keywords: missingKeywords,
+        weak_projects: sizeKb < 80 ? ["Resume file appears small; project detail may be too thin"] : ["Add more measurable project outcomes"],
+        missing_skills: missingKeywords,
+        poor_sections: isPdf || isDocx ? [] : ["file format"]
       }
     },
     suggestions: [
-      { area: "Impact", suggestion: "Add measurable outcomes such as users, latency, accuracy, cost, or conversion." },
-      { area: "Projects", suggestion: "Explain architecture, tradeoffs, deployment, testing, and production constraints." },
-      { area: "Keywords", suggestion: "Add evidence-backed keywords for Docker, CI/CD, monitoring, and system design." }
+      { area: "Impact", suggestion: `Add measurable outcomes for ${inferredFamily} work, such as users, revenue, conversion, accuracy, cost, time saved, or satisfaction.` },
+      { area: "Evidence", suggestion: sizeKb < 80 ? "Resume appears short from file size. Add project details, responsibilities, tools, and measurable results." : "Good file-size signal. Improve reliability by making every bullet measurable." },
+      { area: "Keywords", suggestion: `Add evidence-backed keywords: ${missingKeywords.join(", ")}.` }
     ]
   };
 }
@@ -221,17 +291,24 @@ function localFollowUp(candidateAnswer: string, selectedRole: string) {
 
 function scoreLocalInterview(activeInterview: Interview): Interview {
   const transcript = activeInterview.transcript || [];
-  const wordCount = transcript.reduce((sum, turn) => sum + String(turn.answer || "").split(/\s+/).filter(Boolean).length, 0);
-  const technicalTerms = transcript.reduce((sum, turn) => {
-    const answerText = String(turn.answer || "").toLowerCase();
-    return sum + ["api", "database", "deploy", "metric", "test", "architecture", "latency", "model", "tradeoff"].filter((term) => answerText.includes(term)).length;
-  }, 0);
-  const technical = Math.min(94, 58 + technicalTerms * 5);
-  const communication = Math.min(95, 60 + Math.round(wordCount / Math.max(1, transcript.length * 4)));
-  const clarity = Math.min(93, 62 + Math.round(wordCount / Math.max(1, transcript.length * 5)));
-  const confidence = Math.min(92, 68 + transcript.length * 3);
-  const problem = Math.min(94, 57 + technicalTerms * 4);
-  const leadership = Math.min(90, 58 + (JSON.stringify(transcript).toLowerCase().includes("led") ? 14 : 6));
+  const signals = transcript.map((turn) => signalScore(String(turn.answer || ""), activeInterview.role));
+  const answersText = transcript.map((turn) => String(turn.answer || "")).join(" ");
+  const avg = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  const avgLength = avg(signals.map((signal) => signal.lengthScore));
+  const avgSpecificity = avg(signals.map((signal) => signal.specificity));
+  const roleCoverage = clamp(avg(signals.map((signal) => signal.roleHits)) * 18);
+  const metricCoverage = clamp(avg(signals.map((signal) => signal.metrics)) * 22);
+  const structureCoverage = clamp(avg(signals.map((signal) => signal.star)) * 14);
+  const fillerPenalty = clamp(avg(signals.map((signal) => signal.filler)) * 9, 0, 35);
+  const confidenceSignal = avg(transcript.map((turn) => (turn.confidence_signal || 0.55) * 100));
+  const leadershipHits = countMatches(answersText, ["led", "owned", "managed", "collaborated", "stakeholder", "mentored", "negotiated", "aligned"]);
+  const reasoningHits = countMatches(answersText, ["because", "therefore", "tradeoff", "constraint", "risk", "alternative", "measured"]);
+  const technical = clamp(28 + roleCoverage * 0.55 + avgSpecificity * 0.32 + metricCoverage * 0.2 - fillerPenalty * 0.35);
+  const communication = clamp(34 + avgLength * 0.34 + structureCoverage * 0.28 + confidenceSignal * 0.22 - fillerPenalty * 0.5);
+  const clarity = clamp(36 + structureCoverage * 0.42 + reasoningHits * 5 + metricCoverage * 0.18 - fillerPenalty * 0.6);
+  const confidence = clamp(30 + confidenceSignal * 0.48 + avgLength * 0.18 + transcript.length * 3 - fillerPenalty * 0.35);
+  const problem = clamp(30 + reasoningHits * 7 + metricCoverage * 0.26 + roleCoverage * 0.24 + structureCoverage * 0.2);
+  const leadership = clamp(35 + leadershipHits * 9 + countMatches(answersText, ["customer", "user", "team", "business", "impact"]) * 4 + structureCoverage * 0.18);
   const breakdown = {
     technical_knowledge: technical,
     communication,
@@ -240,12 +317,27 @@ function scoreLocalInterview(activeInterview: Interview): Interview {
     problem_solving: problem,
     leadership
   };
-  const overall = Math.round(Object.values(breakdown).reduce((sum, value) => sum + value, 0) / 6);
+  const difficultyMultiplier = activeInterview.difficulty === "FAANG" ? 0.92 : activeInterview.difficulty === "Advanced" ? 0.96 : activeInterview.difficulty === "Beginner" ? 1.04 : 1;
+  const overall = clamp(Object.values(breakdown).reduce((sum, value) => sum + value, 0) / 6 * difficultyMultiplier);
   const weaknesses = detectLocalWeaknesses(activeInterview, breakdown);
+  const salaryBase = roleFamily(activeInterview.role) === "marketing" ? 92000 : roleFamily(activeInterview.role) === "sales" ? 98000 : roleFamily(activeInterview.role) === "product" ? 125000 : roleFamily(activeInterview.role) === "design" ? 95000 : roleFamily(activeInterview.role) === "business" ? 90000 : 118000;
+  const salaryFactor = 0.72 + overall / 240;
   return {
     ...activeInterview,
     status: "completed",
-    scores: { overall, breakdown, feedback: "Good base. Stronger answers should include metrics, tradeoffs, edge cases, and deployment details." },
+    scores: {
+      overall,
+      breakdown,
+      formula: {
+        role_keyword_coverage: roleCoverage,
+        metric_coverage: metricCoverage,
+        answer_depth: Math.round(avgLength),
+        structure_coverage: structureCoverage,
+        filler_penalty: fillerPenalty,
+        difficulty_multiplier: difficultyMultiplier
+      },
+      feedback: "Score is calculated from role keyword coverage, measurable evidence, answer depth, STAR structure, reasoning, confidence, and filler-word penalty."
+    },
     weaknesses: weaknesses.length ? weaknesses : [{ area: "Depth Under Follow-Up", severity: "Low", explanation: "Good performance. Practice deeper follow-ups with faster structure and stronger numbers." }],
     roadmap: {
       weekly_goals: [
@@ -258,11 +350,11 @@ function scoreLocalInterview(activeInterview: Interview): Interview {
       projects_to_build: ["Interview analytics dashboard", "RAG assistant", "Production API with observability"]
     },
     premium: {
-      hiring_probability: Math.min(96, Math.max(20, Math.round(overall * 0.9))),
-      salary_prediction_usd: { low: 82000, mid: 118000, high: 154000 },
+      hiring_probability: clamp(overall * 0.88 + metricCoverage * 0.08 + roleCoverage * 0.05, 8, 96),
+      salary_prediction_usd: { low: Math.round(salaryBase * (salaryFactor - 0.14)), mid: Math.round(salaryBase * salaryFactor), high: Math.round(salaryBase * (salaryFactor + 0.2)) },
       confidence_detection: confidence,
-      eye_contact_analysis: 72,
-      body_language_analysis: "Stable, with room to improve pacing during technical explanations"
+      eye_contact_analysis: clamp(58 + confidenceSignal * 0.24 + transcript.length * 2),
+      body_language_analysis: confidence > 78 ? "Strong and steady based on answer length and confidence signals" : "Needs more controlled pacing, longer answers, and stronger evidence under follow-up"
     }
   };
 }
@@ -781,6 +873,16 @@ function App() {
           </div>
           <div className="panel">
             <div className="panel-title"><BarChart3 /> Weakness Detection</div>
+            {interview?.scores?.formula && (
+              <div className="formula-grid">
+                {Object.entries(interview.scores.formula).map(([key, value]) => (
+                  <div key={key}>
+                    <span>{key.replaceAll("_", " ")}</span>
+                    <strong>{String(value)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
             {(interview?.weaknesses || []).map((weakness) => (
               <div className="weakness" key={weakness.area}>
                 <strong>{weakness.area}</strong>

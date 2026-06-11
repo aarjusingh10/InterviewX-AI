@@ -27,6 +27,7 @@ Do not use `localhost` on GitHub. `localhost` only works on the computer where t
 - [Database Schema](docs/DATABASE_SCHEMA.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Hosting](docs/HOSTING.md)
+- [Scoring Logic](docs/SCORING.md)
 
 ## Full Hosting
 

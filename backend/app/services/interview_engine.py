@@ -11,6 +11,63 @@ PERSONALITIES = {
     "HR Manager": "behavioral, values clarity, motivation, teamwork, and communication",
 }
 
+ROLE_KEYWORD_MAP = {
+    "engineering": ["api", "database", "deploy", "test", "architecture", "latency", "scalable", "cache", "security", "monitoring", "docker", "cloud"],
+    "ai": ["model", "algorithm", "dataset", "accuracy", "precision", "recall", "overfitting", "features", "training", "inference", "rag", "embedding"],
+    "marketing": ["campaign", "conversion", "funnel", "seo", "cac", "roi", "segment", "channel", "brand", "creative", "lead", "retention"],
+    "sales": ["lead", "pipeline", "discovery", "objection", "crm", "quota", "close", "demo", "prospect", "follow-up", "negotiation"],
+    "product": ["user", "roadmap", "prioritize", "metric", "experiment", "activation", "retention", "feedback", "mvp", "stakeholder"],
+    "design": ["user", "prototype", "accessibility", "wireframe", "usability", "research", "design system", "interaction", "handoff"],
+    "business": ["kpi", "revenue", "cost", "forecast", "dashboard", "process", "stakeholder", "risk", "operations", "analysis"],
+}
+
+
+def _clamp(value: float, minimum: int = 0, maximum: int = 100) -> int:
+    return max(minimum, min(maximum, round(value)))
+
+
+def _role_family(role: str) -> str:
+    lower = role.lower()
+    if "ai" in lower or "ml" in lower or "data scientist" in lower:
+        return "ai"
+    if "marketing" in lower:
+        return "marketing"
+    if "sales" in lower:
+        return "sales"
+    if "product" in lower:
+        return "product"
+    if "design" in lower or "ui/ux" in lower or "graphic" in lower:
+        return "design"
+    if "finance" in lower or "business" in lower or "operations" in lower:
+        return "business"
+    return "engineering"
+
+
+def _count_matches(text: str, terms: list[str]) -> int:
+    lower = text.lower()
+    return sum(1 for term in terms if term in lower)
+
+
+def _signal_score(answer: str, role: str) -> dict:
+    lower = answer.lower()
+    token_count = len(re.findall(r"[a-z0-9+#.%-]+", lower))
+    family = _role_family(role)
+    role_hits = _count_matches(lower, ROLE_KEYWORD_MAP[family])
+    universal_hits = _count_matches(lower, ["because", "tradeoff", "measured", "result", "impact", "challenge", "improved", "learned", "customer", "user"])
+    metrics = len(re.findall(r"\b\d+%|\b\d+x|\b\d+\+|\b\d{2,}\b", lower))
+    star = _count_matches(lower, ["situation", "task", "action", "result", "problem", "solution", "outcome"])
+    filler = _count_matches(lower, ["maybe", "kind of", "sort of", "stuff", "things", "basically"])
+    return {
+        "token_count": token_count,
+        "role_hits": role_hits,
+        "universal_hits": universal_hits,
+        "metrics": metrics,
+        "star": star,
+        "filler": filler,
+        "length_score": _clamp((token_count / 75) * 100),
+        "specificity": _clamp(role_hits * 12 + universal_hits * 5 + metrics * 10 + star * 4 - filler * 8),
+    }
+
 
 def _question_bank(role: str, difficulty: str, resume: dict | None, context: list[str]) -> list[dict]:
     skills = ", ".join((resume or {}).get("skills", [])[:8]) or "the candidate's strongest listed skills"
@@ -145,30 +202,46 @@ def generate_follow_up(answer: str, role: str) -> str:
 async def score_interview(role: str, difficulty: str, transcript: list[dict]) -> dict:
     answers = [turn.get("answer", "") for turn in transcript if turn.get("answer")]
     combined = " ".join(answers)
-    avg_len = mean([len(answer.split()) for answer in answers] or [0])
-    technical_terms = len(re.findall(r"\b(api|database|model|latency|metric|test|deploy|architecture|complexity|tradeoff|cache|index)\b", combined.lower()))
-    clarity = min(95, 45 + avg_len * 1.2)
-    technical = min(96, 42 + technical_terms * 4)
-    communication = min(94, 50 + min(avg_len, 45))
-    confidence = min(93, 55 + sum((turn.get("confidence_signal") or 0.7) for turn in transcript) * 4)
-    problem = min(95, 45 + len(re.findall(r"\b(because|therefore|tradeoff|debug|measure|impact)\b", combined.lower())) * 5)
-    leadership = min(92, 45 + len(re.findall(r"\b(led|owned|collaborated|mentored|stakeholder|decision)\b", combined.lower())) * 6)
+    signals = [_signal_score(answer, role) for answer in answers]
+    avg_length = mean([signal["length_score"] for signal in signals] or [0])
+    avg_specificity = mean([signal["specificity"] for signal in signals] or [0])
+    role_coverage = _clamp(mean([signal["role_hits"] for signal in signals] or [0]) * 18)
+    metric_coverage = _clamp(mean([signal["metrics"] for signal in signals] or [0]) * 22)
+    structure_coverage = _clamp(mean([signal["star"] for signal in signals] or [0]) * 14)
+    filler_penalty = _clamp(mean([signal["filler"] for signal in signals] or [0]) * 9, 0, 35)
+    confidence_signal = mean([(turn.get("confidence_signal") or 0.55) * 100 for turn in transcript] or [55])
+    leadership_hits = _count_matches(combined, ["led", "owned", "managed", "collaborated", "stakeholder", "mentored", "negotiated", "aligned"])
+    reasoning_hits = _count_matches(combined, ["because", "therefore", "tradeoff", "constraint", "risk", "alternative", "measured"])
+    technical = _clamp(28 + role_coverage * 0.55 + avg_specificity * 0.32 + metric_coverage * 0.2 - filler_penalty * 0.35)
+    communication = _clamp(34 + avg_length * 0.34 + structure_coverage * 0.28 + confidence_signal * 0.22 - filler_penalty * 0.5)
+    clarity = _clamp(36 + structure_coverage * 0.42 + reasoning_hits * 5 + metric_coverage * 0.18 - filler_penalty * 0.6)
+    confidence = _clamp(30 + confidence_signal * 0.48 + avg_length * 0.18 + len(transcript) * 3 - filler_penalty * 0.35)
+    problem = _clamp(30 + reasoning_hits * 7 + metric_coverage * 0.26 + role_coverage * 0.24 + structure_coverage * 0.2)
+    leadership = _clamp(35 + leadership_hits * 9 + _count_matches(combined, ["customer", "user", "team", "business", "impact"]) * 4 + structure_coverage * 0.18)
     breakdown = {
-        "technical_knowledge": round(technical),
-        "communication": round(communication),
-        "confidence": round(confidence),
-        "clarity": round(clarity),
-        "problem_solving": round(problem),
-        "leadership": round(leadership),
+        "technical_knowledge": technical,
+        "communication": communication,
+        "confidence": confidence,
+        "clarity": clarity,
+        "problem_solving": problem,
+        "leadership": leadership,
     }
-    overall = round(mean(breakdown.values()))
+    difficulty_multiplier = 0.92 if difficulty == "FAANG" else 0.96 if difficulty == "Advanced" else 1.04 if difficulty == "Beginner" else 1
+    overall = _clamp(mean(breakdown.values()) * difficulty_multiplier)
     fallback = {
         "overall": overall,
         "breakdown": breakdown,
-        "feedback": "Strongest answers connect implementation choices to measurable impact. Improve by making tradeoffs, metrics, and failure handling explicit.",
+        "formula": {
+            "role_keyword_coverage": role_coverage,
+            "metric_coverage": metric_coverage,
+            "answer_depth": round(avg_length),
+            "structure_coverage": structure_coverage,
+            "filler_penalty": filler_penalty,
+            "difficulty_multiplier": difficulty_multiplier,
+        },
+        "feedback": "Score is calculated from role keyword coverage, measurable evidence, answer depth, STAR structure, reasoning, confidence, and filler-word penalty.",
     }
-    prompt = f"Score this {difficulty} {role} interview from 0-100 across the required dimensions. Transcript={transcript}"
-    return await ai_provider.json_task(prompt, fallback)
+    return fallback
 
 
 def detect_weaknesses(transcript: list[dict], scores: dict) -> list[dict]:

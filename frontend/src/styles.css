@@ -172,6 +172,10 @@ header h1 { font-size: clamp(2rem, 4vw, 4.6rem); line-height: .95; margin-bottom
 .weakness { margin-bottom: 10px; position: relative; overflow: hidden; }
 .weakness::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(180deg, var(--coral), var(--aqua)); }
 .weakness span { float: right; color: var(--coral); }
+.formula-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.formula-grid div { border: 1px solid rgba(255,255,255,.09); background: rgba(49,230,209,.055); border-radius: 8px; padding: 10px; }
+.formula-grid span { display: block; color: var(--muted); text-transform: capitalize; font-size: .78rem; margin-bottom: 4px; }
+.formula-grid strong { color: #fff; font-size: 1.1rem; }
 .roadmap { margin-bottom: 30px; }
 .roadmap-row { display: grid; grid-template-columns: 90px 1fr; gap: 14px; margin-bottom: 10px; }
 .roadmap-row span { color: var(--aqua); font-weight: 800; }

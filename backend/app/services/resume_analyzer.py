@@ -1,5 +1,6 @@
 import re
 from collections import Counter
+from statistics import mean
 from app.services.ai_provider import ai_provider
 
 ROLE_KEYWORDS = {
@@ -8,6 +9,10 @@ ROLE_KEYWORDS = {
     "frontend": {"react", "typescript", "accessibility", "state", "performance", "design", "testing"},
     "data": {"sql", "spark", "airflow", "warehouse", "etl", "python", "dbt", "pipeline"},
 }
+
+
+def _clamp(value: float, minimum: int = 0, maximum: int = 100) -> int:
+    return max(minimum, min(maximum, round(value)))
 
 
 def _lines(text: str) -> list[str]:
@@ -46,19 +51,58 @@ async def analyze_resume(text: str) -> dict:
     word_count = len(re.findall(r"\w+", text))
     quantified = len(re.findall(r"\b\d+%|\b\d+x|\b\d+\+|\b\d{2,}\b", text))
     action_verbs = Counter(re.findall(r"\b(built|designed|deployed|optimized|led|created|implemented|automated|trained|scaled)\b", text.lower()))
+    bullet_count = len(re.findall(r"(?m)^\s*[-*•]", text))
+    contact_signal = 1 if re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text) else 0
+    link_signal = len(re.findall(r"github|linkedin|portfolio|kaggle|behance|dribbble", text.lower()))
+    section_count = sum(1 for section in [skills, projects, experience, education, certifications] if section)
+    keyword_density = len(keywords) / max(1, word_count / 120)
+    project_depth = mean([len(project.split()) for project in projects] or [0])
+    weak_language = len(re.findall(r"\b(responsible for|helped|worked on|basic|familiar|some)\b", text.lower()))
 
-    ats = min(98, 45 + len(keywords) * 4 + min(quantified, 8) * 3 + (10 if education else 0))
-    strength = min(97, 40 + len(projects) * 8 + len(experience) * 7 + len(action_verbs) * 3)
-    internship = min(96, 35 + len(skills) * 3 + len(projects) * 10 + (10 if certifications else 0))
-    industry = min(95, 30 + len(experience) * 12 + len(projects) * 7 + min(len(keywords), 12) * 3)
+    ats = _clamp(
+        28
+        + section_count * 7
+        + min(keyword_density, 10) * 3.2
+        + min(quantified, 8) * 2.8
+        + contact_signal * 5
+        + min(link_signal, 3) * 2
+        - max(0, 350 - word_count) * 0.035
+        - weak_language * 1.8
+    )
+    strength = _clamp(
+        25
+        + min(len(projects), 4) * 8
+        + min(len(experience), 5) * 7
+        + min(len(action_verbs), 10) * 2.6
+        + min(project_depth, 45) * 0.45
+        + min(quantified, 10) * 2.5
+        - weak_language * 2
+    )
+    internship = _clamp(
+        30
+        + min(len(skills), 14) * 2.4
+        + min(len(projects), 3) * 9
+        + (8 if education else 0)
+        + (6 if certifications else 0)
+        + min(bullet_count, 10) * 1.3
+    )
+    industry = _clamp(
+        24
+        + min(len(experience), 5) * 9
+        + min(len(projects), 4) * 6
+        + min(len(keywords), 14) * 2.5
+        + min(quantified, 10) * 3
+        + min(link_signal, 3) * 2
+        - weak_language * 2
+    )
 
     missing = sorted({"docker", "testing", "deployment", "metrics", "sql", "system design"} - set(keywords))
     weak_projects = [p for p in projects if len(p.split()) < 12 or not re.search(r"\d|deployed|users|latency|accuracy", p, re.I)]
     suggestions = [
-        {"area": "Impact", "suggestion": "Add quantified outcomes to each major project and internship bullet."},
-        {"area": "Keywords", "suggestion": f"Add evidence-backed keywords: {', '.join(missing[:5])}."},
-        {"area": "Projects", "suggestion": "For every project, include problem, architecture, tradeoffs, deployment, and measurable result."},
-        {"area": "Readability", "suggestion": "Keep bullets action-led and compress low-signal coursework into one line."},
+        {"area": "Impact", "suggestion": f"Detected {quantified} quantified signals. Add numbers to every project and experience bullet for more reliable scoring."},
+        {"area": "Keywords", "suggestion": f"Keyword density is {keyword_density:.1f} per 120 words. Add evidence-backed keywords: {', '.join(missing[:5])}."},
+        {"area": "Projects", "suggestion": f"Average project depth is {round(project_depth)} words. Strong projects should include problem, architecture, tradeoffs, deployment, and measurable result."},
+        {"area": "Readability", "suggestion": f"Detected {weak_language} weak phrasing signals. Replace vague verbs with built, shipped, improved, automated, led, or measured."},
     ]
     fallback = {
         "parsed": {
@@ -83,6 +127,4 @@ async def analyze_resume(text: str) -> dict:
         },
         "suggestions": suggestions,
     }
-    prompt = f"Analyze this resume for InterviewX AI. Extract profile fields, scores, detections, and suggestions.\n{text[:12000]}"
-    return await ai_provider.json_task(prompt, fallback)
-
+    return fallback
