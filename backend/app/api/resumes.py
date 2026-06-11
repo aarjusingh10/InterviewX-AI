@@ -24,7 +24,10 @@ async def upload_resume(file: UploadFile = File(...), user: User = Depends(curre
     text = extract_text(str(path))
     if len(text) < 80:
         raise HTTPException(status_code=400, detail="Resume text is too short to analyze")
-    analysis = await analyze_resume(text)
+    try:
+        analysis = await analyze_resume(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     resume = Resume(
         user_id=user.id,
         filename=file.filename,
@@ -50,4 +53,3 @@ def get_resume(resume_id: int, user: User = Depends(current_user), db: Session =
     if not resume or resume.user_id != user.id:
         raise HTTPException(status_code=404, detail="Resume not found")
     return resume
-

@@ -90,6 +90,26 @@ function countMatches(text: string, terms: string[]) {
   return terms.filter((term) => lower.includes(term)).length;
 }
 
+function setCookie(name: string, value: string, days = 14) {
+  const maxAge = days * 24 * 60 * 60;
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax${secure}`;
+}
+
+function getCookie(name: string) {
+  const key = `${encodeURIComponent(name)}=`;
+  const match = document.cookie
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item.startsWith(key));
+  return match ? decodeURIComponent(match.slice(key.length)) : "";
+}
+
+function deleteCookie(name: string) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${encodeURIComponent(name)}=; Max-Age=0; Path=/; SameSite=Lax${secure}`;
+}
+
 function roleFamily(roleName: string) {
   const lower = roleName.toLowerCase();
   if (lower.includes("ai") || lower.includes("ml") || lower.includes("data scientist")) return "ai";
@@ -160,7 +180,9 @@ async function request(path: string, token: string | null, options: RequestInit 
     } catch {
       detail = `Server returned ${response.status}`;
     }
-    throw new Error(detail);
+    const error = new Error(detail) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -171,7 +193,7 @@ function localUser(fullName: string, emailAddress: string): User {
 
 function getLocalAccounts(): Record<string, { full_name: string; password: string }> {
   try {
-    return JSON.parse(localStorage.getItem("interviewx_accounts") || "{}");
+    return JSON.parse(getCookie("interviewx_accounts") || "{}");
   } catch {
     return {};
   }
@@ -180,50 +202,57 @@ function getLocalAccounts(): Record<string, { full_name: string; password: strin
 function saveLocalAccount(emailAddress: string, fullName: string, accountPassword: string) {
   const accounts = getLocalAccounts();
   accounts[emailAddress.toLowerCase()] = { full_name: fullName || "InterviewX Candidate", password: accountPassword };
-  localStorage.setItem("interviewx_accounts", JSON.stringify(accounts));
+  setCookie("interviewx_accounts", JSON.stringify(accounts), 30);
 }
 
 async function resumeEvidence(file: File) {
   const filename = file.name.toLowerCase();
   const extensionOk = /\.(pdf|docx|doc)$/.test(filename);
-  const nameSignal = /\b(resume|cv|curriculum|profile|portfolio)\b/.test(filename) ? 2 : 0;
   const sizeKb = file.size / 1024;
   const text = await extractResumeText(file);
   const lowerText = text.toLowerCase();
-  const evidenceTerms = [
-    "experience",
-    "education",
-    "skills",
-    "project",
-    "certification",
-    "linkedin",
-    "github",
-    "email",
-    "phone",
-    "summary",
-    "objective",
-    "internship",
-    "work",
-    "achievement"
-  ];
-  const hits = evidenceTerms.filter((term) => lowerText.includes(term)).length;
-  const emailHit = /@/.test(lowerText) ? 1 : 0;
-  const phoneHit = /\d{3}[-.\s]?\d{3}[-.\s]?\d{4}|\+?\d{10,}/.test(lowerText) ? 1 : 0;
+  const tokenCount = words(text).length;
+  const sectionTerms = ["experience", "education", "skills", "projects", "project", "certifications", "summary", "objective", "internship", "work experience", "achievements"];
+  const identityTerms = ["linkedin", "github", "portfolio", "email", "phone", "mobile"];
+  const resumeActionTerms = ["built", "created", "developed", "implemented", "designed", "managed", "led", "improved", "optimized", "deployed", "analyzed", "achieved"];
+  const moduleTerms = ["module", "unit", "chapter", "syllabus", "assignment", "question bank", "lecture", "notes", "tutorial", "worksheet", "experiment no", "lab manual", "course outcome", "table of contents"];
+  const sectionHits = sectionTerms.filter((term) => lowerText.includes(term)).length;
+  const identityHits = identityTerms.filter((term) => lowerText.includes(term)).length;
+  const actionHits = resumeActionTerms.filter((term) => lowerText.includes(term)).length;
+  const moduleHits = moduleTerms.filter((term) => lowerText.includes(term)).length;
+  const emailHit = /[\w.+-]+@[\w-]+\.[\w.-]+/.test(lowerText) ? 1 : 0;
+  const phoneHit = /(\+?\d[\d\s().-]{8,}\d)/.test(lowerText) ? 1 : 0;
   const sizeSignal = sizeKb >= 25 && sizeKb <= 2500 ? 1 : 0;
-  const textSignal = words(text).length > 80 ? 3 : words(text).length > 35 ? 1 : 0;
-  const score = nameSignal + hits + emailHit + phoneHit + sizeSignal + textSignal;
+  const textSignal = tokenCount >= 140 ? 3 : tokenCount >= 70 ? 1 : 0;
+  const score = sectionHits * 2 + identityHits + actionHits + emailHit * 2 + phoneHit + sizeSignal + textSignal - moduleHits * 3;
+  const hasIdentity = emailHit + phoneHit + identityHits >= 1;
+  const hasCoreSections = sectionHits >= 3;
+  const hasExperienceEvidence = actionHits >= 2 || /\b\d+%|\b\d+x|\b\d+\+|\b\d{2,}\b/.test(lowerText);
+  const isModuleLike = moduleHits >= 2 || (/\bmodule\s*[-:]?\s*[ivx0-9]+\b/i.test(text) && sectionHits < 4);
   return {
-    isLikelyResume: extensionOk && score >= 4,
+    isLikelyResume: extensionOk && !isModuleLike && tokenCount >= 70 && hasCoreSections && hasIdentity && hasExperienceEvidence && score >= 8,
     score,
-    hits,
+    hits: sectionHits + identityHits + actionHits,
+    sectionHits,
+    identityHits,
+    actionHits,
+    moduleHits,
     sizeKb,
     text,
     reason: !extensionOk
       ? "Only PDF, DOC, and DOCX files are supported."
-      : words(text).length < 35
+      : tokenCount < 70
         ? "Could not read enough resume text. If this is a scanned/image PDF, export it as a text-based PDF or DOCX."
-      : score < 4
-        ? "This file does not look like a resume. Upload a resume/CV containing sections like skills, experience, education, projects, email, or LinkedIn."
+      : isModuleLike
+        ? "This looks like a module, notes, syllabus, or study document, not a resume. Upload a real resume/CV."
+      : !hasCoreSections
+        ? "This file is missing resume sections. A valid resume should include Skills, Education, Experience/Projects, and Summary or Certifications."
+      : !hasIdentity
+        ? "This file is missing candidate identity/contact signals like email, phone, LinkedIn, GitHub, or portfolio."
+      : !hasExperienceEvidence
+        ? "This file does not contain enough resume achievement evidence. Add project/experience bullets with action verbs and measurable results."
+      : score < 8
+        ? "This file does not look like a resume. Upload a resume/CV, not notes, modules, assignments, or study material."
         : ""
   };
 }
@@ -580,7 +609,7 @@ function RadarChart({ data }: { data: Record<string, number> }) {
 }
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem("interviewx_token"));
+  const [token, setToken] = useState(getCookie("interviewx_token"));
   const [user, setUser] = useState<User | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "signup">("signup");
   const [email, setEmail] = useState("founder@interviewx.ai");
@@ -612,7 +641,7 @@ function App() {
   useEffect(() => {
     if (!token || user) return;
     if (token.startsWith("local-")) {
-      const savedEmail = localStorage.getItem("interviewx_current_email") || email;
+      const savedEmail = getCookie("interviewx_current_email") || email;
       const account = getLocalAccounts()[savedEmail.toLowerCase()];
       setUser(localUser(account?.full_name || name, savedEmail));
       return;
@@ -620,7 +649,7 @@ function App() {
     request("/api/v1/auth/me", token)
       .then(setUser)
       .catch(() => {
-        localStorage.removeItem("interviewx_token");
+        deleteCookie("interviewx_token");
         setToken(null);
       });
   }, [token, user]);
@@ -638,18 +667,23 @@ function App() {
     try {
       const payload = authMode === "signup" ? { email, password, full_name: name } : { email, password };
       const data = await request(`/api/v1/auth/${authMode}`, null, { method: "POST", body: JSON.stringify(payload) });
-      localStorage.setItem("interviewx_token", data.access_token);
+      setCookie("interviewx_token", data.access_token, 14);
+      setCookie("interviewx_current_email", email.toLowerCase(), 14);
       setToken(data.access_token);
       setUser(data.user);
       setMessage("Workspace secured. You can upload a resume now.");
     } catch (error: any) {
+      if (error?.status) {
+        setMessage(error.message || "Authentication failed. Please check your details.");
+        return;
+      }
       const accounts = getLocalAccounts();
       const normalizedEmail = email.toLowerCase();
       if (authMode === "signup") {
         saveLocalAccount(normalizedEmail, name, password);
         const localToken = `local-${crypto.randomUUID()}`;
-        localStorage.setItem("interviewx_token", localToken);
-        localStorage.setItem("interviewx_current_email", normalizedEmail);
+        setCookie("interviewx_token", localToken, 14);
+        setCookie("interviewx_current_email", normalizedEmail, 14);
         setToken(localToken);
         setUser(localUser(name, normalizedEmail));
         setMessage("Account created. You can upload your resume now.");
@@ -660,8 +694,8 @@ function App() {
           return;
         }
         const localToken = `local-${crypto.randomUUID()}`;
-        localStorage.setItem("interviewx_token", localToken);
-        localStorage.setItem("interviewx_current_email", normalizedEmail);
+        setCookie("interviewx_token", localToken, 14);
+        setCookie("interviewx_current_email", normalizedEmail, 14);
         setToken(localToken);
         setUser(localUser(account.full_name, normalizedEmail));
         setMessage("Login successful. You can upload your resume now.");
@@ -687,6 +721,11 @@ function App() {
       setResume(data);
       setMessage("Resume analyzed with ATS, readiness, and improvement signals.");
     } catch (error: any) {
+      if (error?.status === 400) {
+        setResume(null);
+        setMessage(error.message || "This file was rejected by the resume validator.");
+        return;
+      }
       const evidence = await resumeEvidence(file);
       if (!evidence.isLikelyResume) {
         setResume(null);
@@ -959,7 +998,7 @@ function App() {
         {["Command Center", "Resume Analyzer", "Voice Interview", "Analytics", "Roadmap"].map((item, index) => (
           <a key={item} href={`#panel-${index}`}>{item}</a>
         ))}
-        <button className="logout" onClick={() => { localStorage.removeItem("interviewx_token"); localStorage.removeItem("interviewx_current_email"); setToken(null); setUser(null); }}><LogOut /> Sign out</button>
+        <button className="logout" onClick={() => { deleteCookie("interviewx_token"); deleteCookie("interviewx_current_email"); setToken(null); setUser(null); }}><LogOut /> Sign out</button>
       </aside>
 
       <section className="workspace">

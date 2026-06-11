@@ -1,13 +1,61 @@
 import re
 from collections import Counter
 from statistics import mean
-from app.services.ai_provider import ai_provider
 
 ROLE_KEYWORDS = {
     "ai": {"python", "pytorch", "tensorflow", "rag", "llm", "vector", "ml", "nlp", "deployment"},
     "backend": {"api", "database", "postgresql", "redis", "docker", "auth", "microservices", "testing"},
     "frontend": {"react", "typescript", "accessibility", "state", "performance", "design", "testing"},
     "data": {"sql", "spark", "airflow", "warehouse", "etl", "python", "dbt", "pipeline"},
+}
+
+RESUME_SECTIONS = {
+    "summary",
+    "objective",
+    "skills",
+    "technical skills",
+    "experience",
+    "work experience",
+    "internship",
+    "projects",
+    "project experience",
+    "education",
+    "certifications",
+    "achievements",
+}
+
+CONTACT_TERMS = {"linkedin", "github", "portfolio", "email", "phone", "mobile", "kaggle", "behance"}
+ACTION_TERMS = {
+    "built",
+    "created",
+    "developed",
+    "implemented",
+    "designed",
+    "managed",
+    "led",
+    "improved",
+    "optimized",
+    "deployed",
+    "analyzed",
+    "achieved",
+    "launched",
+    "automated",
+}
+NON_RESUME_TERMS = {
+    "module",
+    "unit",
+    "chapter",
+    "syllabus",
+    "assignment",
+    "question bank",
+    "lecture",
+    "notes",
+    "tutorial",
+    "worksheet",
+    "lab manual",
+    "experiment no",
+    "course outcome",
+    "table of contents",
 }
 
 
@@ -40,7 +88,55 @@ def _keyword_hits(text: str) -> list[str]:
     return [word for word in known if word.lower() in words]
 
 
+def classify_resume_text(text: str) -> dict:
+    lower = text.lower()
+    word_count = len(re.findall(r"\b[a-zA-Z0-9+#.%-]+\b", text))
+    section_hits = sum(1 for term in RESUME_SECTIONS if term in lower)
+    contact_hits = sum(1 for term in CONTACT_TERMS if term in lower)
+    action_hits = sum(1 for term in ACTION_TERMS if re.search(rf"\b{re.escape(term)}\b", lower))
+    non_resume_hits = sum(1 for term in NON_RESUME_TERMS if term in lower)
+    email_hit = 1 if re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text) else 0
+    phone_hit = 1 if re.search(r"(\+?\d[\d\s().-]{8,}\d)", text) else 0
+    quantified = len(re.findall(r"\b\d+%|\b\d+x|\b\d+\+|\b\d{2,}\b", text))
+    score = section_hits * 2 + contact_hits + action_hits + email_hit * 2 + phone_hit + min(quantified, 4) - non_resume_hits * 3
+    is_module_like = non_resume_hits >= 2 or bool(re.search(r"\bmodule\s*[-:]?\s*[ivx0-9]+\b", text, re.I) and section_hits < 4)
+    has_identity = contact_hits + email_hit + phone_hit >= 1
+    has_core_sections = section_hits >= 3
+    has_achievement_evidence = action_hits >= 2 or quantified >= 1
+    is_resume = word_count >= 70 and not is_module_like and has_identity and has_core_sections and has_achievement_evidence and score >= 8
+
+    if word_count < 70:
+        reason = "Could not read enough resume text. Upload a text-based PDF/DOCX resume, not a scanned/image file."
+    elif is_module_like:
+        reason = "This looks like a module, notes, syllabus, assignment, or study document, not a resume."
+    elif not has_core_sections:
+        reason = "This file is missing resume sections like Skills, Education, Experience, Projects, or Certifications."
+    elif not has_identity:
+        reason = "This file is missing candidate contact/profile signals like email, phone, LinkedIn, GitHub, or portfolio."
+    elif not has_achievement_evidence:
+        reason = "This file lacks resume achievement evidence. Add project/experience bullets with action verbs or measurable results."
+    elif score < 8:
+        reason = "This file does not look like a resume/CV."
+    else:
+        reason = ""
+
+    return {
+        "is_resume": is_resume,
+        "reason": reason,
+        "score": score,
+        "word_count": word_count,
+        "section_hits": section_hits,
+        "contact_hits": contact_hits + email_hit + phone_hit,
+        "action_hits": action_hits,
+        "non_resume_hits": non_resume_hits,
+    }
+
+
 async def analyze_resume(text: str) -> dict:
+    classification = classify_resume_text(text)
+    if not classification["is_resume"]:
+        raise ValueError(classification["reason"])
+
     lines = _lines(text)
     keywords = _keyword_hits(text)
     projects = _extract_section(text, ["Projects", "Project Experience", "Personal Projects"])
